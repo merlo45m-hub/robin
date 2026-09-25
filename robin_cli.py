@@ -44,6 +44,7 @@ def main():
     parser = argparse.ArgumentParser(description="Robin Dark-Web OSINT CLI (Headless)")
     parser.add_argument("query", help="The initial investigation query")
     parser.add_argument("--preset", default="threat_intel", help="Investigation preset (default: threat_intel)")
+    parser.add_argument("--model", metavar="MODEL", help="Model name to use (default: first available from get_model_choices())")
     parser.add_argument("--max-results", type=int, default=None, help="Cap the number of search results before filtering")
     parser.add_argument("--json", action="store_true", help="Output only a single machine-readable JSON object")
     parser.add_argument("--quiet", action="store_true", help="Output only the saved JSON file path (overridden by --json)")
@@ -59,7 +60,14 @@ def main():
                 print("No LLM models available. Configure at least one API key in /opt/robin/.env", file=sys.stderr)
                 sys.exit(1)
             
-            selected_model = model_choices[0]
+            if args.model is not None:
+                if args.model not in model_choices:
+                    available_models = ", ".join(model_choices)
+                    print(f"Error: Model '{args.model}' not available. Available models: {available_models}", file=sys.stderr)
+                    sys.exit(1)
+                selected_model = args.model
+            else:
+                selected_model = model_choices[0]
 
             # 2. Preset validation
             if not hasattr(llm, "PRESET_PROMPTS"):
