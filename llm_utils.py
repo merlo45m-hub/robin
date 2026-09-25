@@ -98,7 +98,7 @@ _llm_config_map = {
     'qwen3-80b-openrouter': {
         'class': ChatOpenAI,
         'constructor_params': {
-            'model_name': 'qwen/qwen3-next-80b-a3b-instruct:free',
+            'model_name': 'nvidia/nemotron-3.5-lightning:free',
             'base_url': OPENROUTER_BASE_URL,
             'api_key': OPENROUTER_API_KEY  # Use OpenRouter API key
         }

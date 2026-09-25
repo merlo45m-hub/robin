@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv("/opt/robin/.env")
 
 
 def _clean_env(name, default=None):
