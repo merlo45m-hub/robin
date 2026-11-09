@@ -588,7 +588,11 @@ async def get_investigation_by_id(investigation_id: str):
 
     try:
         with open(target_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # The filename IS the investigation id and the stored record does not carry
+        # one; without this the client renders "ID: N/A".
+        data.setdefault("id", target_file.stem)
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read investigation file: {e}")
 
