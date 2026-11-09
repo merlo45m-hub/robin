@@ -9,3 +9,5 @@ backports.tarfile
 langchain-anthropic
 langchain_community
 langchain_google_genai
+langfuse
+arize-phoenix

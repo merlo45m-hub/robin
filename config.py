@@ -27,3 +27,18 @@ LLAMA_CPP_BASE_URL = _clean_env("LLAMA_CPP_BASE_URL")
 CUSTOM_API_BASE_URL = _clean_env("CUSTOM_API_BASE_URL")
 CUSTOM_API_KEY = _clean_env("CUSTOM_API_KEY")
 CUSTOM_API_MODEL = _clean_env("CUSTOM_API_MODEL")
+
+# Telemetry configuration
+LANGFUSE_PUBLIC_KEY = _clean_env("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_SECRET_KEY = _clean_env("LANGFUSE_SECRET_KEY")
+LANGFUSE_HOST = _clean_env("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+PHOENIX_API_KEY = _clean_env("PHOENIX_API_KEY")
+PHOENIX_ENDPOINT = _clean_env("PHOENIX_ENDPOINT", "https://app.phoenix.arize.com/v1/traces")
+
+PRIMARY_LLM_PROVIDER = _clean_env("PRIMARY_LLM_PROVIDER", "openrouter")
+FALLBACK_LLM_PROVIDER = _clean_env("FALLBACK_LLM_PROVIDER", "agy")
+
+TELEMETRY_BATCH_SIZE = int(_clean_env("TELEMETRY_BATCH_SIZE", "50"))
+TELEMETRY_FLUSH_INTERVAL = float(_clean_env("TELEMETRY_FLUSH_INTERVAL", "5.0"))
+TELEMETRY_MAX_QUEUE_SIZE = int(_clean_env("TELEMETRY_MAX_QUEUE_SIZE", "10000"))

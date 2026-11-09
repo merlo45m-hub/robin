@@ -106,6 +106,57 @@ def _is_useful_title(title):
     """Title must have length >= 4 and at least one alphanumeric character."""
     return bool(title) and len(title) >= 4 and any(ch.isalnum() for ch in title)
 
+
+_STOPWORDS = {
+    "the", "and", "for", "with", "from", "this", "that", "your", "you", "how",
+    "what", "why", "best", "new", "all", "our", "are", "was", "were", "has",
+}
+
+# Words too generic to indicate relevance ("marketplaces", "directories").
+_NAV_WORDS = {
+    # generic site chrome
+    "marketplace", "marketplaces", "directory", "directories", "categories",
+    "category", "home", "index", "search", "login", "register", "contact",
+    "about", "forum", "forums", "blog", "news", "faq", "help", "support",
+    # darknet directory category menu labels (TORLib and peers)
+    "hacking", "hacks", "services", "service", "market", "shop", "store",
+    "porn", "adult", "cryptocurrency", "crypto", "money", "finance",
+    "email", "hosting", "vpn", "security", "privacy", "drugs", "narcotics",
+    "weapons", "fraud", "cards", "counterfeit", "leaks", "databases",
+    "software", "ebooks", "guides", "tutorials", "gambling", "betting",
+    "social", "communication", "transport", "travel", "jobs", "other",
+}
+
+
+def _relevance_terms(query):
+    """Query tokens worth matching on, lowercased and de-stopworded."""
+    return [
+        t for t in re.findall(r"[a-z0-9]{3,}", (query or "").lower())
+        if t not in _STOPWORDS
+    ]
+
+
+def _relevance_score(title, link, terms):
+    """2 for a term in the title, 1 for a term in the URL. 0 means irrelevant."""
+    if not terms:
+        return 1
+    t = (title or "").lower()
+    l = (link or "").lower()
+    score = 0
+    for term in terms:
+        if term in t:
+            score += 2
+        if term in l:
+            score += 1
+    return score
+
+
+def _is_navigation_title(title):
+    """Category/menu labels that appear on every results page regardless of query."""
+    words = set(re.findall(r"[a-z]+", (title or "").lower()))
+    return bool(words) and words <= _NAV_WORDS
+
+
 def _trim_title(title):
     return title if len(title) <= MAX_TITLE_CHARS else title[:MAX_TITLE_CHARS].rstrip() + "..."
 
@@ -142,7 +193,9 @@ def fetch_search_results(endpoint, query):
 
         soup = BeautifulSoup(response.text, "html.parser")
         engine_host = (urlparse(url).hostname or "").lower()
-        links = []
+        terms = _relevance_terms(query)
+        scored = []
+        fallback = []
 
         for a in soup.find_all("a"):
             try:
@@ -155,10 +208,26 @@ def fetch_search_results(endpoint, query):
                 title = a.get_text(strip=True)
                 if not _is_useful_title(title):
                     continue
-                links.append({"title": _trim_title(title), "link": target})
+                entry = {"title": _trim_title(title), "link": target}
+                # Navigation labels ("Marketplaces", "Directories") show up on every
+                # results page and previously dominated the output for any query.
+                if _is_navigation_title(title):
+                    continue
+                score = _relevance_score(title, target, terms)
+                if score > 0:
+                    scored.append((score, entry))
+                else:
+                    fallback.append(entry)
             except Exception:
                 continue
-        return links
+
+        # Prefer query-relevant hits, best score first. If nothing is relevant, return
+        # empty: returning the unfiltered set handed back the site's category menu for
+        # every query, which is what made a nonsense query and a real one identical.
+        if scored:
+            scored.sort(key=lambda x: -x[0])
+            return [e for _, e in scored]
+        return []
     except Exception:
         return []
 
