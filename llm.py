@@ -2,22 +2,25 @@ import re
 import openai
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.callbacks import CallbackManager
 from llm_utils import _common_llm_params, resolve_model_config, get_model_choices
 from config import (
     OPENAI_API_KEY,
     ANTHROPIC_API_KEY,
     GOOGLE_API_KEY,
     OPENROUTER_API_KEY,
+    PRIMARY_LLM_PROVIDER,
+    FALLBACK_LLM_PROVIDER,
 )
 import logging
-import re
-
 import warnings
+
+from telemetry import get_telemetry_handler, is_telemetry_enabled
 
 warnings.filterwarnings("ignore")
 
 
-def get_llm(model_choice):
+def get_llm(model_choice, session_id: str = None, user_id: str = None, tags: list = None, metadata: dict = None):
     # Look up the configuration (cloud or local Ollama)
     config = resolve_model_config(model_choice)
 
@@ -36,11 +39,30 @@ def get_llm(model_choice):
     # Model-specific parameters will override common ones if there are any conflicts
     all_params = {**_common_llm_params, **model_specific_params}
 
+    # Add provider metadata for telemetry
+    all_params["metadata"] = {
+        **all_params.get("metadata", {}),
+        "provider": PRIMARY_LLM_PROVIDER,
+        "fallback_provider": FALLBACK_LLM_PROVIDER,
+    }
+
     # Validate that the required credentials exist before we hit the API
     _ensure_credentials(model_choice, llm_class, model_specific_params)
 
     # Create the LLM instance using the gathered parameters
     llm_instance = llm_class(**all_params)
+
+    # Add telemetry callbacks if enabled
+    if is_telemetry_enabled():
+        handler = get_telemetry_handler(
+            session_id=session_id,
+            user_id=user_id,
+            tags=tags,
+            metadata=metadata,
+        )
+        if llm_instance.callbacks is None:
+            llm_instance.callbacks = CallbackManager([])
+        llm_instance.callbacks.add_handler(handler)
 
     return llm_instance
 
@@ -75,10 +97,10 @@ def _ensure_credentials(model_choice: str, llm_class, model_params: dict) -> Non
             _require(OPENAI_API_KEY, "OPENAI_API_KEY", "OpenAI")
 
 
-def refine_query(llm, user_input):
+def refine_query(llm, user_input, session_id: str = None, user_id: str = None):
     system_prompt = """
-    You are a Cybercrime Threat Intelligence Expert. Your task is to refine the provided user query that needs to be sent to darkweb search engines. 
-    
+    You are a Cybercrime Threat Intelligence Expert. Your task is to refine the provided user query that needs to be sent to darkweb search engines.
+
     Rules:
     1. Analyze the user query and think about how it can be improved to use as search engine query
     2. Refine the user query by adding or removing words so that it returns the best result from dark web search engines
@@ -92,15 +114,22 @@ def refine_query(llm, user_input):
         [("system", system_prompt), ("user", "{query}")]
     )
     chain = prompt_template | llm | StrOutputParser()
-    return chain.invoke({"query": user_input})
+
+    config = {}
+    if session_id:
+        config["configurable"] = {"session_id": session_id}
+    if user_id:
+        config.setdefault("configurable", {})["user_id"] = user_id
+
+    return chain.invoke({"query": user_input}, config=config)
 
 
-def filter_results(llm, query, results):
+def filter_results(llm, query, results, session_id: str = None, user_id: str = None):
     if not results:
         return []
 
     system_prompt = """
-    You are a Cybercrime Threat Intelligence Expert. You are given a dark web search query and a list of search results in the form of index, link and title. 
+    You are a Cybercrime Threat Intelligence Expert. You are given a dark web search query and a list of search results in the form of index, link and title.
     Your task is select the Top 20 relevant results that best match the search query for user to investigate more.
     Rule:
     1. Output ONLY atmost top 20 indices (comma-separated list) no more than that that best match the input query
@@ -115,14 +144,21 @@ def filter_results(llm, query, results):
         [("system", system_prompt), ("user", "{results}")]
     )
     chain = prompt_template | llm | StrOutputParser()
+
+    config = {}
+    if session_id:
+        config["configurable"] = {"session_id": session_id}
+    if user_id:
+        config.setdefault("configurable", {})["user_id"] = user_id
+
     try:
-        result_indices = chain.invoke({"query": query, "results": final_str})
+        result_indices = chain.invoke({"query": query, "results": final_str}, config=config)
     except openai.RateLimitError as e:
         print(
             f"Rate limit error: {e} \n Truncating to Web titles only with 30 characters"
         )
         final_str = _generate_final_string(results, truncate=True)
-        result_indices = chain.invoke({"query": query, "results": final_str})
+        result_indices = chain.invoke({"query": query, "results": final_str}, config=config)
 
     # Select top_k results using original (non-truncated) results
     parsed_indices = []
@@ -300,7 +336,7 @@ PRESET_PROMPTS = {
 }
 
 
-def generate_summary(llm, query, content, preset="threat_intel", custom_instructions=""):
+def generate_summary(llm, query, content, preset="threat_intel", custom_instructions="", session_id: str = None, user_id: str = None):
     system_prompt = PRESET_PROMPTS.get(preset, PRESET_PROMPTS["threat_intel"])
     if custom_instructions and custom_instructions.strip():
         system_prompt = system_prompt.rstrip() + f"\n\nAdditionally focus on: {custom_instructions.strip()}"
@@ -308,4 +344,11 @@ def generate_summary(llm, query, content, preset="threat_intel", custom_instruct
         [("system", system_prompt), ("user", "{content}")]
     )
     chain = prompt_template | llm | StrOutputParser()
-    return chain.invoke({"query": query, "content": content})
+
+    config = {}
+    if session_id:
+        config["configurable"] = {"session_id": session_id}
+    if user_id:
+        config.setdefault("configurable", {})["user_id"] = user_id
+
+    return chain.invoke({"query": query, "content": content}, config=config)
