@@ -1,5 +1,5 @@
 import requests
-import random, re
+import random, re, threading
 from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, unquote
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,15 +39,35 @@ SEARCH_ENGINES = [
     {"name": "Torgol", "url": "http://torgolnpeouim56dykfob6jh5r2ps2j73enc42s2um4ufob3ny4fcdyd.onion/?q={query}"},
     {"name": "The Deep Searches", "url": "http://searchgf7gdtauh7bhnbyed4ivxqmuoat3nm6zfrg3ymkq6mtnpye3ad.onion/search?q={query}"},
     {"name": "Candle", "url": "http://gjobqjj7wyczbqie.onion/candle/?q={query}"},
+
+    # --- Added from the DarkWeb wiki ---
+    # Clearnet (reachable over the Tor SOCKS proxy, but not .onion)
+    {"name": "Ahmia (clearnet)", "url": "https://ahmia.fi/search/?q={query}"},
+    {"name": "Daily Dark Web", "url": "https://dailydarkweb.net/"},
+    {"name": "Ransomware.live", "url": "https://www.ransomware.live/"},
+
+    # Onion services
+    {"name": "Dark Hunt", "url": "http://darkhuntxyxutk3cda4eogyvbcdcmsijv4i2dwtkfoeb6ggwzz7ke3qd.onion/search?q={query}"},
+    {"name": "Torch", "url": "http://xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion/search?q={query}"},
+    {"name": "Breach Forums", "url": "http://breachqr3dqbysbq5khaadg5ynnpxn2wrmw5y3rnzesun55l6lkq73yd.onion/"},
 ]
 
 DEFAULT_SEARCH_ENGINES = [e["url"] for e in SEARCH_ENGINES]
 
-def get_tor_session():
+# Per-engine budget. Onion engines are routinely slow or dead; a long budget here
+# multiplied across engines and retries is what pushed the whole /investigate
+# pipeline past the caller's timeout.
+ENGINE_TIMEOUT_S = 15
+ENGINE_RETRIES = 1
+
+_thread_local = threading.local()
+
+
+def _build_tor_session():
     session = requests.Session()
     retry = Retry(
-        total=3, read=3, connect=3,
-        backoff_factor=0.5,
+        total=ENGINE_RETRIES, read=ENGINE_RETRIES, connect=ENGINE_RETRIES,
+        backoff_factor=0.2,
         status_forcelist=[500, 502, 503, 504]
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -57,6 +77,20 @@ def get_tor_session():
         "http": "socks5h://127.0.0.1:9050",
         "https": "socks5h://127.0.0.1:9050"
     }
+    return session
+
+
+def get_tor_session():
+    """Per-thread Tor session, built once and reused.
+
+    A fresh session per engine meant a new SOCKS handshake for every engine on
+    every search; a single shared requests.Session across the worker pool is not
+    safe. Thread-local gives each worker one reusable session.
+    """
+    session = getattr(_thread_local, "tor_session", None)
+    if session is None:
+        session = _build_tor_session()
+        _thread_local.tor_session = session
     return session
 
 ONION_URL_RE = re.compile(r'https?://[a-z0-9.-]+\.onion[^\s"\'<>]*', re.IGNORECASE)
@@ -102,7 +136,7 @@ def fetch_search_results(endpoint, query):
     session = get_tor_session()
 
     try:
-        response = session.get(url, headers=headers, timeout=40)
+        response = session.get(url, headers=headers, timeout=ENGINE_TIMEOUT_S)
         if response.status_code != 200:
             return []
 
@@ -149,7 +183,7 @@ def _dedup_key(link):
         "?" + query if query else "",
     )
 
-def get_search_results(refined_query, max_workers=5):
+def get_search_results(refined_query, max_workers=8):
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(fetch_search_results, endpoint, refined_query)
